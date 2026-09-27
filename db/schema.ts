@@ -13,6 +13,8 @@ import {
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
+  username: text("username").unique(),
+  passwordHash: text("password_hash"),
   email: text("email").unique(),
   name: text("name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -44,6 +46,9 @@ export const igLinks = pgTable(
 
 export const linkTokens = pgTable("link_tokens", {
   token: text("token").primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id), // the web user who requested this code
   botId: uuid("bot_id")
     .notNull()
     .references(() => bots.id),

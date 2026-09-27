@@ -28,10 +28,18 @@ async function main() {
         .returning()
     )[0];
 
-  await db.insert(metaTokens).values({
-    botId: bot.id,
-    accessToken,
+  const existingToken = await db.query.metaTokens.findFirst({
+    where: eq(metaTokens.botId, bot.id),
   });
+
+  if (existingToken) {
+    await db
+      .update(metaTokens)
+      .set({ accessToken, refreshedAt: new Date() })
+      .where(eq(metaTokens.id, existingToken.id));
+  } else {
+    await db.insert(metaTokens).values({ botId: bot.id, accessToken });
+  }
 
   console.log(`Seeded bot '${bot.slug}' (id=${bot.id}, ig_business_id=${bot.igBusinessId})`);
 }
