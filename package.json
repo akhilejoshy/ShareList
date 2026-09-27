@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:seed": "cross-env DOTENV_CONFIG_PATH=.env.local tsx -r dotenv/config db/seed.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",
@@ -22,6 +23,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
     "dotenv": "^18.0.4",
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
