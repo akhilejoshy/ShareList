@@ -60,7 +60,7 @@ export default async function Home() {
         </p>
       ) : entries.length === 0 ? (
         <p className="text-zinc-500">
-          Nothing saved yet. Share a reel to @sharelist_movies to see it appear here.
+          Nothing saved yet. Share a reel to @share__list to see it appear here.
         </p>
       ) : (
         <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">

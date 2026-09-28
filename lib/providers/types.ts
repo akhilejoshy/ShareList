@@ -15,6 +15,6 @@ export interface ItemData {
 }
 
 export interface MetadataProvider {
-  search(query: string): Promise<ProviderCandidate[]>;
+  search(query: string, options?: { year?: string }): Promise<ProviderCandidate[]>;
   getById(externalId: string): Promise<ItemData>;
 }

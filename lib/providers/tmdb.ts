@@ -1,7 +1,11 @@
 import { env } from "@/lib/env";
 import type { ItemData, MetadataProvider, ProviderCandidate } from "./types";
 
-const BASE_URL = "https://api.themoviedb.org/3";
+// Note: api.tmdb.org is TMDB's official endpoint that avoids ISP-level SNI blocks in regions like India
+const BASE_URLS = [
+  process.env.TMDB_BASE_URL || "https://api.tmdb.org/3",
+  "https://api.themoviedb.org/3",
+];
 const IMAGE_BASE = "https://image.tmdb.org/t/p";
 
 interface TmdbSearchResult {
@@ -21,6 +25,7 @@ interface TmdbSearchResponse {
 interface TmdbMovieDetail extends TmdbSearchResult {
   genres: { id: number; name: string }[];
   videos?: { results: { site: string; type: string; key: string }[] };
+  alternative_titles?: { titles: { iso_3166_1: string; title: string; type: string }[] };
   original_language: string;
 }
 
@@ -35,30 +40,61 @@ function toCandidate(r: TmdbSearchResult): ProviderCandidate {
 }
 
 async function tmdbFetch<T>(path: string, params: Record<string, string> = {}): Promise<T> {
-  const url = new URL(`${BASE_URL}${path}`);
-  url.searchParams.set("api_key", env.TMDB_API_KEY!);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  let lastError: Error | null = null;
 
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    throw new Error(`TMDB request failed (${res.status}): ${await res.text()}`);
+  for (const base of BASE_URLS) {
+    try {
+      const url = new URL(`${base}${path}`);
+      url.searchParams.set("api_key", env.TMDB_API_KEY!);
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null && v !== "") {
+          url.searchParams.set(k, v);
+        }
+      }
+
+      const res = await fetch(url.toString());
+      if (!res.ok) {
+        throw new Error(`TMDB request failed (${res.status}): ${await res.text()}`);
+      }
+      return (await res.json()) as T;
+    } catch (err: unknown) {
+      lastError = err as Error;
+      console.warn(`[tmdb] fetch attempt failed on ${base}: ${(err as Error).message}`);
+    }
   }
-  return res.json();
+
+  throw lastError ?? new Error("TMDB request failed on all endpoints");
 }
 
 export const tmdbProvider: MetadataProvider = {
-  async search(query: string): Promise<ProviderCandidate[]> {
-    const data = await tmdbFetch<TmdbSearchResponse>("/search/movie", { query });
-    return data.results.slice(0, 5).map(toCandidate);
+  async search(query: string, options?: { year?: string }): Promise<ProviderCandidate[]> {
+    const params: Record<string, string> = { query };
+    if (options?.year) {
+      params.year = options.year;
+    }
+
+    const data = await tmdbFetch<TmdbSearchResponse>("/search/movie", params);
+    let results = data.results;
+
+    if (results.length === 0 && options?.year) {
+      const relaxed = await tmdbFetch<TmdbSearchResponse>("/search/movie", { query });
+      results = relaxed.results;
+    }
+
+    return results.slice(0, 5).map((r) => ({
+      ...toCandidate(r),
+      extra: { matchedQuery: query },
+    }));
   },
 
   async getById(externalId: string): Promise<ItemData> {
     const detail = await tmdbFetch<TmdbMovieDetail>(`/movie/${externalId}`, {
-      append_to_response: "videos",
+      append_to_response: "videos,alternative_titles",
     });
     const trailer = detail.videos?.results.find(
       (v) => v.site === "YouTube" && v.type === "Trailer",
     );
+    const alts = detail.alternative_titles?.titles?.map((t) => t.title) ?? [];
 
     return {
       externalId: String(detail.id),
@@ -71,6 +107,7 @@ export const tmdbProvider: MetadataProvider = {
         language: detail.original_language,
         trailerUrl: trailer ? `https://www.youtube.com/watch?v=${trailer.key}` : null,
         overview: detail.overview,
+        alternativeTitles: alts,
       },
     };
   },

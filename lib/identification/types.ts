@@ -9,10 +9,22 @@ export interface PipelineContext {
 export interface StepResult {
   source: "user_text" | "caption" | "video" | "location_tag" | "user_reply";
   candidates: ProviderCandidate[];
+  method?: string;
+  extractedQuery?: string;
+  details?: string;
 }
 
-export type IdentificationStep = (ctx: PipelineContext) => Promise<StepResult | null>;
+export interface PipelineOutcome {
+  result: StepResult | null;
+  pipelineLogs: string[];
+}
+
+export type IdentificationStep = (
+  ctx: PipelineContext,
+  logs: string[],
+) => Promise<StepResult | null>;
 
 export interface IdentificationStrategy {
   steps: IdentificationStep[];
 }
+

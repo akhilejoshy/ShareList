@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { collectionEntries, igLinks, linkTokens, reels, users } from "@/db/schema";
 import { sendBotText } from "@/lib/bot/send";
-import type { IgMessagingEvent } from "@/lib/webhook/types";
+import type { IgMessageReceivedEvent } from "@/lib/webhook/types";
 
 interface Bot {
   id: string;
@@ -14,7 +14,7 @@ const LINK_PATTERN = /^link\s+([A-Z0-9]{4,10})$/i;
 export async function tryHandleLinkCommand(
   bot: Bot,
   accessToken: string | null,
-  event: IgMessagingEvent,
+  event: IgMessageReceivedEvent,
 ): Promise<boolean> {
   const text = event.message?.text?.trim();
   if (!text) return false;
@@ -25,7 +25,16 @@ export async function tryHandleLinkCommand(
   const token = match[1].toUpperCase();
   const senderId = event.sender.id;
 
-  const reply = async (msg: string) => {
+  const reply = async (msg: string, statusText: string) => {
+    console.log(`
+┌────────────────────── 🔗 INSTAGRAM ACCOUNT LINKING ──────────────────────┐
+│ Sender ID       : ${senderId}
+│ User DM Text    : "${text}"
+│ Link Token      : ${token}
+│ Status          : ${statusText}
+│ 💬 DM Reply Sent : "${msg}"
+└──────────────────────────────────────────────────────────────────────────┘
+`);
     if (accessToken) await sendBotText(bot.igBusinessId, accessToken, senderId, msg);
   };
 
@@ -34,7 +43,10 @@ export async function tryHandleLinkCommand(
   });
 
   if (!row || row.used || row.expiresAt < new Date()) {
-    await reply("That code is invalid or expired — generate a new one on the site.");
+    await reply(
+      "That code is invalid or expired — generate a new one on the site.",
+      "⚠️ Code invalid, expired, or already used",
+    );
     return true;
   }
 
@@ -65,6 +77,9 @@ export async function tryHandleLinkCommand(
     await db.insert(igLinks).values({ userId: row.userId, botId: bot.id, igUserId: senderId });
   }
 
-  await reply("✅ Linked! View your list at your Sharelist dashboard.");
+  await reply(
+    "✅ Linked! View your list at your Sharelist dashboard.",
+    "✅ Linked successfully to user " + row.userId,
+  );
   return true;
 }

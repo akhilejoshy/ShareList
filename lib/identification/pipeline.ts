@@ -7,17 +7,24 @@ const STRATEGIES: Record<string, IdentificationStrategy> = {
 
 export interface PipelineOutcome {
   result: StepResult | null;
+  pipelineLogs: string[];
 }
 
 export async function runPipeline(botSlug: string, ctx: PipelineContext): Promise<PipelineOutcome> {
   const strategy = STRATEGIES[botSlug];
-  if (!strategy) return { result: null };
+  const pipelineLogs: string[] = [];
+
+  if (!strategy) {
+    pipelineLogs.push(`No strategy configured for bot: "${botSlug}"`);
+    return { result: null, pipelineLogs };
+  }
 
   for (const step of strategy.steps) {
-    const result = await step(ctx);
+    const result = await step(ctx, pipelineLogs);
     if (result && result.candidates.length > 0) {
-      return { result };
+      return { result, pipelineLogs };
     }
   }
-  return { result: null };
+
+  return { result: null, pipelineLogs };
 }

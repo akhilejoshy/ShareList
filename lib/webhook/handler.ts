@@ -19,8 +19,9 @@ export async function handleWebhookGet(req: NextRequest) {
 export async function handleWebhookPost(req: NextRequest) {
   const rawBody = await req.text();
   const signature = req.headers.get("x-hub-signature-256");
+  const contentLength = req.headers.get("content-length");
 
-  if (!verifySignature(rawBody, signature)) {
+  if (!verifySignature(rawBody, signature, contentLength)) {
     console.warn("Webhook signature verification failed");
     return NextResponse.json({ ok: true }, { status: 200 });
   }
@@ -34,15 +35,23 @@ export async function handleWebhookPost(req: NextRequest) {
 
   for (const entry of payload.entry ?? []) {
     for (const event of entry.messaging ?? []) {
-      const bot = await routeByIgBusinessId(event.recipient.id);
-      if (!bot) {
-        console.warn(`No bot found for ig_business_id=${event.recipient.id}`);
+      // Ignore echoes, read receipts, delivery receipts, or events without user content
+      if (
+        event.message?.is_echo ||
+        event.read ||
+        event.delivery ||
+        (!event.message && !event.postback) ||
+        !event.sender?.id
+      ) {
         continue;
       }
-      console.log(`[webhook] routed to bot=${bot.slug} from sender=${event.sender.id}`, {
-        text: event.message?.text,
-        postback: event.postback?.payload,
-      });
+
+      const businessId = event.recipient?.id || entry.id;
+      const bot = await routeByIgBusinessId(businessId);
+      if (!bot) {
+        console.warn(`[webhook] No bot found for ig_business_id=${businessId}`);
+        continue;
+      }
 
       try {
         const tokenRow = await db.query.metaTokens.findFirst({
@@ -50,9 +59,15 @@ export async function handleWebhookPost(req: NextRequest) {
         });
         const accessToken = tokenRow?.accessToken ?? null;
 
-        const handledAsLink = await tryHandleLinkCommand(bot, accessToken, event);
+        const messageEvent = {
+          ...event,
+          sender: { id: event.sender.id },
+          recipient: { id: businessId },
+        };
+
+        const handledAsLink = await tryHandleLinkCommand(bot, accessToken, messageEvent);
         if (!handledAsLink) {
-          await ingestReel(bot, accessToken, event);
+          await ingestReel(bot, accessToken, messageEvent);
         }
       } catch (err) {
         console.error("[webhook] ingest failed", err);

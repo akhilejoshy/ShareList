@@ -5,7 +5,7 @@ import { resolveUserId } from "@/db/queries/users";
 import { runPipeline } from "@/lib/identification/pipeline";
 import { tmdbProvider } from "@/lib/providers/tmdb";
 import { sendBotText } from "@/lib/bot/send";
-import type { IgMessagingEvent } from "@/lib/webhook/types";
+import type { IgMessageReceivedEvent, IgMessagingEvent } from "@/lib/webhook/types";
 
 interface Bot {
   id: string;
@@ -14,14 +14,28 @@ interface Bot {
 }
 
 function extractShare(event: IgMessagingEvent) {
-  const share = event.message?.attachments?.find((a) => a.type === "share");
+  const share = event.message?.attachments?.find(
+    (a) => a.type === "share" || a.type === "ig_reel",
+  );
+  let permalink = share?.payload.url ?? null;
+  const caption = share?.payload.title ?? null;
+
+  if (!permalink && event.message?.text) {
+    const urlMatch = event.message.text.match(
+      /https?:\/\/(?:www\.)?instagram\.com\/(?:reel|p)\/[A-Za-z0-9_-]+/i,
+    );
+    if (urlMatch) {
+      permalink = urlMatch[0];
+    }
+  }
+
   return {
-    permalink: share?.payload.url ?? null,
-    caption: share?.payload.title ?? null,
+    permalink,
+    caption,
   };
 }
 
-export async function ingestReel(bot: Bot, accessToken: string | null, event: IgMessagingEvent) {
+export async function ingestReel(bot: Bot, accessToken: string | null, event: IgMessageReceivedEvent) {
   if (!event.message?.mid) return;
 
   const userId = await resolveUserId(bot.id, event.sender.id);
@@ -53,15 +67,31 @@ export async function ingestReel(bot: Bot, accessToken: string | null, event: Ig
 
   const outcome = await runPipeline(bot.slug, { reelId: reel.id, userText, caption });
 
+  const formattedCaption = caption
+    ? caption.replace(/\r?\n+/g, " ").slice(0, 140) + (caption.length > 140 ? "..." : "")
+    : "(none)";
+
   if (!outcome.result || outcome.result.candidates.length === 0) {
     await db.update(reels).set({ status: "unknown" }).where(eq(reels.id, reel.id));
+    const replyMsg = "🤔 Couldn't identify that one — reply with the movie's name and I'll try again.";
+
+    console.log(`
+┌────────────────────── 📥 INSTAGRAM MESSAGE INGEST ──────────────────────┐
+│ Sender IG ID    : ${event.sender.id}
+│ User DM Text    : ${userText ? `"${userText}"` : "(none)"}
+│ Reel URL        : ${permalink ?? "(none)"}
+│ Post Caption    : "${formattedCaption}"
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🔍 Identification Pipeline Logs:
+${outcome.pipelineLogs.map((l) => `│   • ${l}`).join("\n")}
+├─────────────────────────────────────────────────────────────────────────┤
+│ ⚠️  Identification Result : ❌ UNRECOGNIZED
+│ 💬 DM Reply Sent        : "${replyMsg}"
+└─────────────────────────────────────────────────────────────────────────┘
+`);
+
     if (accessToken) {
-      await sendBotText(
-        bot.igBusinessId,
-        accessToken,
-        event.sender.id,
-        "🤔 Couldn't identify that one — reply with the movie's name and I'll try again.",
-      );
+      await sendBotText(bot.igBusinessId, accessToken, event.sender.id, replyMsg);
     }
     return;
   }
@@ -79,9 +109,26 @@ export async function ingestReel(bot: Bot, accessToken: string | null, event: Ig
   const top = outcome.result.candidates[0];
   const itemData = await tmdbProvider.getById(top.externalId);
 
+  const matchedQuery = (top.extra?.matchedQuery as string | undefined)?.trim();
+  let titleToSave = itemData.title;
+  const altTitles = (itemData.metadata.alternativeTitles as string[] | undefined) ?? [];
+  const isAltMatch =
+    matchedQuery &&
+    matchedQuery.toLowerCase() !== itemData.title.toLowerCase() &&
+    altTitles.some((alt) => alt.toLowerCase() === matchedQuery.toLowerCase());
+
+  if (isAltMatch) {
+    titleToSave = `${itemData.title} (aka ${matchedQuery})`;
+  }
+
   const existingItem = await db.query.items.findFirst({
     where: (i, { and, eq: eqOp }) => and(eqOp(i.botId, bot.id), eqOp(i.externalId, itemData.externalId)),
   });
+
+  if (existingItem && isAltMatch && existingItem.title !== titleToSave) {
+    await db.update(items).set({ title: titleToSave }).where(eq(items.id, existingItem.id));
+    existingItem.title = titleToSave;
+  }
 
   const [item] =
     existingItem !== undefined
@@ -91,7 +138,7 @@ export async function ingestReel(bot: Bot, accessToken: string | null, event: Ig
           .values({
             botId: bot.id,
             externalId: itemData.externalId,
-            title: itemData.title,
+            title: titleToSave,
             coverImageUrl: itemData.coverImageUrl,
             bannerUrl: itemData.bannerUrl,
             metadata: itemData.metadata,
@@ -112,13 +159,32 @@ export async function ingestReel(bot: Bot, accessToken: string | null, event: Ig
 
   await db.update(reels).set({ status: "matched", entryId: entry.id }).where(eq(reels.id, reel.id));
 
+  const year = itemData.metadata.year ? ` (${itemData.metadata.year})` : "";
+  const replyMsg = `✅ Saved: ${titleToSave}${year}`;
+
+  console.log(`
+┌────────────────────── 📥 INSTAGRAM MESSAGE INGEST ──────────────────────┐
+│ Sender IG ID    : ${event.sender.id}
+│ User DM Text    : ${userText ? `"${userText}"` : "(none)"}
+│ Reel URL        : ${permalink ?? "(none)"}
+│ Post Caption    : "${formattedCaption}"
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🔍 Identification Pipeline Logs:
+${outcome.pipelineLogs.map((l) => `│   • ${l}`).join("\n")}
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🎯 Saved Movie          : ${titleToSave}${year} [TMDB ID: ${itemData.externalId}]
+│ 🏷️  Identified Via       : ${outcome.result.method ?? outcome.result.source}
+│ 📝 Query Extracted      : "${outcome.result.extractedQuery ?? ""}"
+${outcome.result.details ? `│ ℹ️  Extraction Context  : ${outcome.result.details}\n` : ""}│ 💬 DM Reply Sent        : "${replyMsg}"
+└─────────────────────────────────────────────────────────────────────────┘
+`);
+
   if (accessToken) {
-    const year = itemData.metadata.year ? ` (${itemData.metadata.year})` : "";
     await sendBotText(
       bot.igBusinessId,
       accessToken,
       event.sender.id,
-      `✅ Saved: ${itemData.title}${year}`,
+      replyMsg,
     );
   }
 }

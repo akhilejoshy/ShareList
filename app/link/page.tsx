@@ -29,7 +29,7 @@ export default async function LinkPage({
       ) : code ? (
         <div className="flex flex-col gap-3">
           <p className="text-zinc-600 dark:text-zinc-400">
-            DM this code to <strong>@sharelist_movies</strong>:
+            DM this code to <strong>@share__list</strong>:
           </p>
           <p className="rounded bg-zinc-100 px-4 py-3 text-center text-2xl font-mono tracking-widest dark:bg-zinc-900">
             link {code}

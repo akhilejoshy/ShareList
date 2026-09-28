@@ -10,12 +10,13 @@ export interface IgWebhookPayload {
 }
 
 export interface IgMessagingEvent {
-  sender: { id: string };
-  recipient: { id: string };
+  sender?: { id: string };
+  recipient?: { id: string };
   timestamp: number;
   message?: {
     mid: string;
     text?: string;
+    is_echo?: boolean;
     attachments?: IgAttachment[];
     quick_reply?: { payload: string };
   };
@@ -23,6 +24,19 @@ export interface IgMessagingEvent {
     mid: string;
     payload: string;
   };
+  read?: {
+    mid?: string;
+    watermark?: number;
+  };
+  delivery?: {
+    mids?: string[];
+    watermark?: number;
+  };
+}
+
+export interface IgMessageReceivedEvent extends IgMessagingEvent {
+  sender: { id: string };
+  recipient: { id: string };
 }
 
 export interface IgAttachment {
