@@ -1,6 +1,7 @@
 import { tmdbProvider } from "@/lib/providers/tmdb";
 import { env } from "@/lib/env";
 import { extractMovieWithGemini } from "./gemini";
+import { stepVideo } from "./video";
 import type { IdentificationStrategy, PipelineContext, StepResult } from "./types";
 
 async function stepUserText(
@@ -200,5 +201,5 @@ async function stepCaption(
 }
 
 export const moviesStrategy: IdentificationStrategy = {
-  steps: [stepUserText, stepCaption],
+  steps: [stepUserText, stepCaption, stepVideo],
 };

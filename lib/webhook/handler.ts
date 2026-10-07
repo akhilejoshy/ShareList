@@ -4,8 +4,7 @@ import { db } from "@/db";
 import { metaTokens } from "@/db/schema";
 import { verifyHandshake, verifySignature } from "@/lib/webhook/verify";
 import { routeByIgBusinessId } from "@/lib/webhook/routeByBotId";
-import { ingestReel } from "@/lib/reels/ingest";
-import { tryHandleLinkCommand } from "@/lib/bot/linking";
+import { routeIncoming } from "@/lib/bot/routeIncoming";
 import type { IgWebhookPayload } from "@/lib/webhook/types";
 
 export async function handleWebhookGet(req: NextRequest) {
@@ -65,10 +64,7 @@ export async function handleWebhookPost(req: NextRequest) {
           recipient: { id: businessId },
         };
 
-        const handledAsLink = await tryHandleLinkCommand(bot, accessToken, messageEvent);
-        if (!handledAsLink) {
-          await ingestReel(bot, accessToken, messageEvent);
-        }
+        await routeIncoming(bot, accessToken, messageEvent);
       } catch (err) {
         console.error("[webhook] ingest failed", err);
       }

@@ -32,13 +32,17 @@ async function main() {
     where: eq(metaTokens.botId, bot.id),
   });
 
+  // IG long-lived tokens last ~60 days; the daily cron refreshes them
+  // before this expiry (see lib/cron/refreshTokens.ts).
+  const expiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+
   if (existingToken) {
     await db
       .update(metaTokens)
-      .set({ accessToken, refreshedAt: new Date() })
+      .set({ accessToken, expiresAt, refreshedAt: new Date() })
       .where(eq(metaTokens.id, existingToken.id));
   } else {
-    await db.insert(metaTokens).values({ botId: bot.id, accessToken });
+    await db.insert(metaTokens).values({ botId: bot.id, accessToken, expiresAt });
   }
 
   console.log(`Seeded bot '${bot.slug}' (id=${bot.id}, ig_business_id=${bot.igBusinessId})`);

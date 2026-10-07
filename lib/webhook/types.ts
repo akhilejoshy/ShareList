@@ -40,9 +40,10 @@ export interface IgMessageReceivedEvent extends IgMessagingEvent {
 }
 
 export interface IgAttachment {
-  type: string; // 'share' | 'image' | 'video' | ...
+  type: string; // 'share' | 'ig_reel' | 'image' | 'video' | ...
   payload: {
     url?: string;
     title?: string;
+    reel_video_id?: string;
   };
 }

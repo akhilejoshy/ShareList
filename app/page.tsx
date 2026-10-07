@@ -1,10 +1,15 @@
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import Link from "next/link";
 import { db } from "@/db";
-import { collectionEntries, igLinks, items } from "@/db/schema";
+import { collectionEntries, igLinks, items, reels } from "@/db/schema";
 import { getMoviesBot } from "@/db/queries/bots";
 import { requireUserId } from "@/lib/auth/session";
-import { signOut } from "@/auth";
+import { groupByTypeAndLanguage, normalizeEntry } from "@/lib/entries/group";
+import Header from "@/components/layout/Header";
+import HorizontalRow from "@/components/layout/HorizontalRow";
+import { UnknownPosterCard } from "@/components/PosterCard";
+import { Card } from "@/components/ui/card";
+import FilterPopover from "@/components/filters/FilterPopover";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +20,7 @@ async function getEntries(userId: string) {
       title: items.title,
       coverImageUrl: items.coverImageUrl,
       metadata: items.metadata,
+      visited: collectionEntries.visited,
     })
     .from(collectionEntries)
     .innerJoin(items, eq(collectionEntries.itemId, items.id))
@@ -22,72 +28,152 @@ async function getEntries(userId: string) {
     .orderBy(desc(collectionEntries.addedAt));
 }
 
-export default async function Home() {
+async function getUnknownEntries(userId: string) {
+  const rows = await db
+    .select({
+      entryId: collectionEntries.id,
+      permalink: reels.permalink,
+      thumbnailUrl: reels.thumbnailUrl,
+    })
+    .from(collectionEntries)
+    .leftJoin(reels, eq(reels.entryId, collectionEntries.id))
+    .where(and(eq(collectionEntries.userId, userId), isNull(collectionEntries.itemId)))
+    .orderBy(desc(collectionEntries.addedAt));
+
+  // De-dupe: multiple reels can point at one Unknown entry.
+  const seen = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) if (!seen.has(r.entryId)) seen.set(r.entryId, r);
+  return [...seen.values()];
+}
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ genre?: string; watched?: string }>;
+}) {
   const userId = await requireUserId();
   const bot = await getMoviesBot();
+  const { genre, watched } = await searchParams;
 
   const isLinked = await db.query.igLinks.findFirst({
     where: and(eq(igLinks.userId, userId), eq(igLinks.botId, bot.id)),
   });
 
-  const entries = isLinked ? await getEntries(userId) : [];
+  const allEntries = isLinked ? await getEntries(userId) : [];
+  const unknownEntries = isLinked ? await getUnknownEntries(userId) : [];
+
+  const genres = [
+    ...new Set(
+      allEntries.flatMap((e) => (e.metadata as { genres?: string[] } | null)?.genres ?? []),
+    ),
+  ].sort();
+
+  const filtered = allEntries.filter((e) => {
+    const g = (e.metadata as { genres?: string[] } | null)?.genres ?? [];
+    if (genre && !g.includes(genre)) return false;
+    if (watched === "yes" && !e.visited) return false;
+    if (watched === "no" && e.visited) return false;
+    return true;
+  });
+
+  const normalized = filtered.map(normalizeEntry);
+  const sections = groupByTypeAndLanguage(normalized);
+
+  const query = (overrides: Record<string, string | undefined>) => {
+    const params = new URLSearchParams();
+    const merged = { genre, watched, ...overrides };
+    if (merged.genre) params.set("genre", merged.genre);
+    if (merged.watched) params.set("watched", merged.watched);
+    const qs = params.toString();
+    return qs ? `/?${qs}` : "/";
+  };
+
+  const filterGroups = [
+    {
+      label: "Genre",
+      options: [
+        { label: "All", href: query({ genre: undefined }), active: !genre },
+        ...genres.map((g) => ({ label: g, href: query({ genre: g }), active: genre === g })),
+      ],
+    },
+    {
+      label: "Watched",
+      options: [
+        { label: "All", href: query({ watched: undefined }), active: !watched },
+        { label: "Watched", href: query({ watched: "yes" }), active: watched === "yes" },
+        { label: "Unwatched", href: query({ watched: "no" }), active: watched === "no" },
+      ],
+    },
+  ];
 
   return (
-    <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-black">
-      <div className="mb-8 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
-          Sharelist — Movies
-        </h1>
-        <form
-          action={async () => {
-            "use server";
-            await signOut({ redirectTo: "/login" });
-          }}
-        >
-          <button type="submit" className="text-sm text-zinc-500 underline">
-            Log out
-          </button>
-        </form>
-      </div>
+    <div className="min-h-screen bg-background">
+      <Header />
 
-      {!isLinked ? (
-        <p className="text-zinc-500">
-          Your account isn&apos;t linked to Instagram yet.{" "}
-          <Link href="/link" className="underline">
-            Link it here
-          </Link>{" "}
-          to start saving reels.
-        </p>
-      ) : entries.length === 0 ? (
-        <p className="text-zinc-500">
-          Nothing saved yet. Share a reel to @share__list to see it appear here.
-        </p>
-      ) : (
-        <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-          {entries.map((e) => {
-            const year = (e.metadata as { year?: string } | null)?.year;
-            return (
-              <div key={e.entryId} className="flex flex-col gap-2">
-                {e.coverImageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={e.coverImageUrl}
-                    alt={e.title}
-                    className="aspect-[2/3] w-full rounded-lg object-cover"
-                  />
-                ) : (
-                  <div className="flex aspect-[2/3] w-full items-center justify-center rounded-lg bg-zinc-200 text-sm text-zinc-500 dark:bg-zinc-800">
-                    No image
+      <main className="w-full px-4 py-6 md:px-6">
+        {!isLinked ? (
+          <Card className="flex flex-col gap-2 p-6">
+            <h2 className="text-lg font-semibold text-foreground">Link your Instagram</h2>
+            <p className="text-sm text-muted-foreground">
+              Your account isn&apos;t linked to Instagram yet.{" "}
+              <Link href="/link" className="text-primary underline">
+                Link it here
+              </Link>{" "}
+              to start saving reels.
+            </p>
+          </Card>
+        ) : (
+          <>
+            {genres.length > 0 && (
+              <div className="mb-8">
+                <FilterPopover
+                  groups={filterGroups}
+                  activeCount={(genre ? 1 : 0) + (watched ? 1 : 0)}
+                />
+              </div>
+            )}
+
+            {normalized.length === 0 && unknownEntries.length === 0 ? (
+              <p className="text-muted-foreground">
+                Nothing saved yet. Share a reel to @share__list to see it appear here.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-10">
+                {unknownEntries.length > 0 && (
+                  <div>
+                    <h3 className="mb-4 text-xl font-bold text-foreground">
+                      Unidentified <span className="text-base font-normal text-muted-foreground">({unknownEntries.length})</span>
+                    </h3>
+                    <div className="scrollbar-hide flex gap-4 overflow-x-auto pb-2 snap-x snap-mandatory">
+                      {unknownEntries.map((e) => (
+                        <UnknownPosterCard
+                          key={e.entryId}
+                          entryId={e.entryId}
+                          thumbnailUrl={e.thumbnailUrl}
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
-                <span className="text-sm font-medium text-black dark:text-zinc-50">
-                  {e.title} {year ? `(${year})` : ""}
-                </span>
+
+                {sections.map((section) => (
+                  <div key={section.type} className="flex flex-col gap-6">
+                    <h2 className="text-2xl font-bold text-foreground">{section.label}</h2>
+                    {section.rows.map((row) => (
+                      <HorizontalRow
+                        key={row.language}
+                        title={row.language}
+                        entries={row.entries}
+                        viewMoreHref={`/list?type=${section.type}&language=${encodeURIComponent(row.language)}`}
+                      />
+                    ))}
+                  </div>
+                ))}
               </div>
-            );
-          })}
-        </div>
-      )}
-    </main>
+            )}
+          </>
+        )}
+      </main>
+    </div>
   );
 }

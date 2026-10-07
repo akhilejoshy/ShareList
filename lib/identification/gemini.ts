@@ -87,3 +87,59 @@ Respond ONLY with a JSON object in this exact format:
 
   return null;
 }
+
+export async function extractMovieFromVideo(
+  base64Data: string,
+  mimeType: string,
+): Promise<{ title: string; year?: string } | null> {
+  const apiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const prompt = `Watch this short video clip. If it shows or mentions a movie/series title (e.g. on-screen text, title card, or spoken dialogue referencing the title), identify the exact movie/series title and release year if determinable.
+Respond ONLY with a JSON object: {"title": "Movie Title or null", "year": "YYYY or null"}`;
+
+  for (const model of CANDIDATE_MODELS) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { inline_data: { mime_type: mimeType, data: base64Data } },
+                { text: prompt },
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+        }),
+      });
+
+      if (!res.ok) {
+        if (res.status === 503 || res.status === 404 || res.status === 400) continue;
+        console.warn(`[gemini-video] API call failed with status ${res.status}: ${await res.text()}`);
+        continue;
+      }
+
+      const data = await res.json();
+      let rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) continue;
+      rawText = rawText.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+
+      const parsed = JSON.parse(rawText) as GeminiMovieExtraction;
+      if (parsed.title && typeof parsed.title === "string" && parsed.title.toLowerCase() !== "null") {
+        return {
+          title: parsed.title.trim(),
+          year: parsed.year && parsed.year !== "null" ? parsed.year.trim() : undefined,
+        };
+      }
+      return null;
+    } catch (err) {
+      console.warn(`[gemini-video] Error calling model ${model}:`, (err as Error).message);
+    }
+  }
+
+  return null;
+}
